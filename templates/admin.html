@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>入退室管理 - 管理ページ</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h2>入退室履歴</h2>
+                <a href="/" class="btn btn-outline-primary">
+                    <i class="bi bi-house"></i> メインページへ
+                </a>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <input type="month" id="monthFilter" class="form-control" style="max-width: 200px;">
+                </div>
+                
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>日時</th>
+                                <th>名前</th>
+                                <th>動作</th>
+                                <th class="text-end">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recordsTable">
+                            {% for record in records %}
+                            <tr data-id="{{ record.id }}" data-timestamp="{{ record.timestamp }}">
+                                <td>{{ record.timestamp }}</td>
+                                <td>{{ record.userName }}</td>
+                                <td>{{ '入室' if record.type == 'in' else '退室' }}</td>
+                                <td class="text-end">
+                                    <button class="btn btn-sm btn-outline-primary edit-btn">
+                                        <i class="bi bi-pencil"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger delete-btn">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 編集モーダル -->
+    <div class="modal fade" id="editModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">記録の編集</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editForm">
+                        <input type="hidden" id="recordId">
+                        <div class="mb-3">
+                            <label for="editUserName" class="form-label">名前</label>
+                            <input type="text" class="form-control" id="editUserName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editType" class="form-label">動作</label>
+                            <select class="form-select" id="editType" required>
+                                <option value="in">入室</option>
+                                <option value="out">退室</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editTimestamp" class="form-label">日時</label>
+                            <input type="datetime-local" class="form-control" id="editTimestamp" required>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
+                    <button type="button" class="btn btn-primary" id="saveChanges">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 現在の月を設定
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = (today.getMonth() + 1).toString().padStart(2, '0');
+            document.getElementById('monthFilter').value = `${year}-${month}`;
+            filterByMonth(`${year}-${month}`);
+        });
+        
+        // 月フィルターの処理
+        document.getElementById('monthFilter').addEventListener('change', function() {
+            filterByMonth(this.value);
+        });
+        
+        function filterByMonth(month) {
+            const rows = document.querySelectorAll('#recordsTable tr');
+            
+            rows.forEach(row => {
+                const timestamp = row.getAttribute('data-timestamp');
+                if (timestamp && timestamp.startsWith(month)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        }
+        
+        // 編集ボタンの処理
+        document.querySelectorAll('.edit-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const row = this.closest('tr');
+                const recordId = row.getAttribute('data-id');
+                const cells = row.querySelectorAll('td');
+                
+                // モーダルにデータを設定
+                document.getElementById('recordId').value = recordId;
+                document.getElementById('editUserName').value = cells[1].textContent.trim();
+                document.getElementById('editType').value = cells[2].textContent.trim() === '入室' ? 'in' : 'out';
+                
+                // ISOフォーマットに変換して設定
+                const timestamp = new Date(cells[0].textContent.trim());
+                const localISOTime = new Date(timestamp.getTime() - (timestamp.getTimezoneOffset() * 60000))
+                    .toISOString().slice(0, 16);
+                document.getElementById('editTimestamp').value = localISOTime;
+                
+                // モーダルを表示
+                const editModal = new bootstrap.Modal(document.getElementById('editModal'));
+                editModal.show();
+            });
+        });
+        
+        // 保存ボタンの処理
+        document.getElementById('saveChanges').addEventListener('click', function() {
+            const recordId = document.getElementById('recordId').value;
+            const userName = document.getElementById('editUserName').value;
+            const type = document.getElementById('editType').value;
+            const timestamp = document.getElementById('editTimestamp').value;
+            
+            const formData = new FormData();
+            formData.append('userName', userName);
+            formData.append('type', type);
+            formData.append('timestamp', new Date(timestamp).toISOString());
+            
+            fetch(`/api/access/${recordId}`, {
+                method: 'PUT',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    window.location.reload();
+                }
+            });
+        });
+        
+        // 削除ボタンの処理
+        document.querySelectorAll('.delete-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                if (confirm('この記録を削除してもよろしいですか？')) {
+                    const row = this.closest('tr');
+                    const recordId = row.getAttribute('data-id');
+                    
+                    fetch(`/api/access/${recordId}`, {
+                        method: 'DELETE'
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            row.remove();
+                        }
+                    });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
