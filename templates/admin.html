@@ -6,47 +6,47 @@
     <title>入退室管理 - 管理ページ</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        .table-row-same-date {
+            background-color: rgba(0,0,0,0.02);
+        }
+        .no-data {
+            color: #999;
+            font-style: italic;
+        }
+    </style>
 </head>
 <body>
     <div class="container mt-4">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h2>入退室履歴</h2>
-                <a href="/" class="btn btn-outline-primary">
-                    <i class="bi bi-house"></i> メインページへ
-                </a>
+                <div>
+                    <a href="/" class="btn btn-outline-primary me-2">
+                        <i class="bi bi-house"></i> メインページへ
+                    </a>
+                </div>
             </div>
             <div class="card-body">
-                <div class="mb-3">
+                <div class="mb-3 d-flex align-items-center">
+                    <label for="monthFilter" class="form-label me-2 mb-0">月を選択:</label>
                     <input type="month" id="monthFilter" class="form-control" style="max-width: 200px;">
                 </div>
                 
                 <div class="table-responsive">
-                    <table class="table table-striped">
-                        <thead>
+                    <table class="table table-bordered">
+                        <thead class="table-light">
                             <tr>
-                                <th>日時</th>
-                                <th>名前</th>
-                                <th>動作</th>
-                                <th class="text-end">操作</th>
+                                <th width="15%">日付</th>
+                                <th width="20%">名前（入室）</th>
+                                <th width="15%">入室時間</th>
+                                <th width="20%">名前（退室）</th>
+                                <th width="15%">退室時間</th>
+                                <th width="15%">操作</th>
                             </tr>
                         </thead>
                         <tbody id="recordsTable">
-                            {% for record in records %}
-                            <tr data-id="{{ record.id }}" data-timestamp="{{ record.timestamp }}">
-                                <td>{{ record.timestamp }}</td>
-                                <td>{{ record.userName }}</td>
-                                <td>{{ '入室' if record.type == 'in' else '退室' }}</td>
-                                <td class="text-end">
-                                    <button class="btn btn-sm btn-outline-primary edit-btn">
-                                        <i class="bi bi-pencil"></i>
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-danger delete-btn">
-                                        <i class="bi bi-trash"></i>
-                                    </button>
-                                </td>
-                            </tr>
-                            {% endfor %}
+                            <!-- ここに日付ごとの入退室記録が動的に生成されます -->
                         </tbody>
                     </table>
                 </div>
@@ -65,20 +65,18 @@
                 <div class="modal-body">
                     <form id="editForm">
                         <input type="hidden" id="recordId">
+                        <input type="hidden" id="editType">
                         <div class="mb-3">
                             <label for="editUserName" class="form-label">名前</label>
                             <input type="text" class="form-control" id="editUserName" required>
                         </div>
                         <div class="mb-3">
-                            <label for="editType" class="form-label">動作</label>
-                            <select class="form-select" id="editType" required>
-                                <option value="in">入室</option>
-                                <option value="out">退室</option>
-                            </select>
+                            <label for="editDate" class="form-label">日付</label>
+                            <input type="date" class="form-control" id="editDate" required>
                         </div>
                         <div class="mb-3">
-                            <label for="editTimestamp" class="form-label">日時</label>
-                            <input type="datetime-local" class="form-control" id="editTimestamp" required>
+                            <label for="editTime" class="form-label">時間</label>
+                            <input type="time" class="form-control" id="editTime" required>
                         </div>
                     </form>
                 </div>
@@ -92,68 +90,213 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // 現在の月を設定
-        document.addEventListener('DOMContentLoaded', function() {
-            const today = new Date();
-            const year = today.getFullYear();
-            const month = (today.getMonth() + 1).toString().padStart(2, '0');
-            document.getElementById('monthFilter').value = `${year}-${month}`;
-            filterByMonth(`${year}-${month}`);
-        });
-        
-        // 月フィルターの処理
-        document.getElementById('monthFilter').addEventListener('change', function() {
-            filterByMonth(this.value);
-        });
-        
-        function filterByMonth(month) {
-            const rows = document.querySelectorAll('#recordsTable tr');
+        // 履歴データを日付ごとにグループ化する関数
+        function processRecords(records) {
+            // 日付ごとにユーザーの入退室データを保持する構造
+            const dateUserMap = {};
             
-            rows.forEach(row => {
-                const timestamp = row.getAttribute('data-timestamp');
-                if (timestamp && timestamp.startsWith(month)) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
+            // すべての記録をループして日付ごとにグループ化
+            records.forEach(record => {
+                const timestamp = new Date(record.timestamp);
+                const date = timestamp.toISOString().split('T')[0]; // YYYY-MM-DD形式
+                const time = timestamp.toTimeString().split(' ')[0].substring(0, 5); // HH:MM形式
+                const user = record.userName;
+                const type = record.type; // 'in'または'out'
+                const recordId = record.id;
+                
+                if (!dateUserMap[date]) {
+                    dateUserMap[date] = {};
+                }
+                
+                if (!dateUserMap[date][user]) {
+                    dateUserMap[date][user] = { in: null, out: null, inId: null, outId: null };
+                }
+                
+                // 入室または退室情報を更新
+                if (type === 'in') {
+                    // 既存の入室記録がある場合は、より新しいタイムスタンプの場合のみ更新
+                    if (!dateUserMap[date][user].in || timestamp > new Date(dateUserMap[date][user].in)) {
+                        dateUserMap[date][user].in = time;
+                        dateUserMap[date][user].inId = recordId;
+                    }
+                } else if (type === 'out') {
+                    // 既存の退室記録がある場合は、より新しいタイムスタンプの場合のみ更新
+                    if (!dateUserMap[date][user].out || timestamp > new Date(dateUserMap[date][user].out)) {
+                        dateUserMap[date][user].out = time;
+                        dateUserMap[date][user].outId = recordId;
+                    }
                 }
             });
+            
+            // ソートされた日付の配列を生成
+            const sortedDates = Object.keys(dateUserMap).sort().reverse();
+            
+            return { dateUserMap, sortedDates };
         }
         
-        // 編集ボタンの処理
-        document.querySelectorAll('.edit-btn').forEach(button => {
-            button.addEventListener('click', function() {
-                const row = this.closest('tr');
-                const recordId = row.getAttribute('data-id');
-                const cells = row.querySelectorAll('td');
+        // テーブルを更新する関数
+        function updateTable(records) {
+            const { dateUserMap, sortedDates } = processRecords(records);
+            const tableBody = document.getElementById('recordsTable');
+            tableBody.innerHTML = '';
+            
+            let rowClass = '';
+            
+            sortedDates.forEach(date => {
+                const users = Object.keys(dateUserMap[date]);
                 
-                // モーダルにデータを設定
-                document.getElementById('recordId').value = recordId;
-                document.getElementById('editUserName').value = cells[1].textContent.trim();
-                document.getElementById('editType').value = cells[2].textContent.trim() === '入室' ? 'in' : 'out';
+                // 日付ごとの背景色を交互に変える
+                rowClass = rowClass === 'table-row-same-date' ? '' : 'table-row-same-date';
                 
-                // ISOフォーマットに変換して設定
-                const timestamp = new Date(cells[0].textContent.trim());
-                const localISOTime = new Date(timestamp.getTime() - (timestamp.getTimezoneOffset() * 60000))
-                    .toISOString().slice(0, 16);
-                document.getElementById('editTimestamp').value = localISOTime;
-                
-                // モーダルを表示
-                const editModal = new bootstrap.Modal(document.getElementById('editModal'));
-                editModal.show();
+                users.forEach((user, userIndex) => {
+                    const userData = dateUserMap[date][user];
+                    const row = document.createElement('tr');
+                    row.className = rowClass;
+                    
+                    // 日付（最初のユーザーの場合のみ表示）
+                    const dateCell = document.createElement('td');
+                    if (userIndex === 0) {
+                        // 日付を日本語形式に変換（YYYY-MM-DD → YYYY年MM月DD日）
+                        const [year, month, day] = date.split('-');
+                        dateCell.textContent = `${year}年${parseInt(month)}月${parseInt(day)}日`;
+                        dateCell.rowSpan = users.length;
+                    } else {
+                        dateCell.style.display = 'none';
+                    }
+                    
+                    // 入室情報
+                    const inNameCell = document.createElement('td');
+                    inNameCell.textContent = userData.in ? user : '';
+                    
+                    const inTimeCell = document.createElement('td');
+                    inTimeCell.textContent = userData.in || '';
+                    if (!userData.in) {
+                        inTimeCell.classList.add('no-data');
+                        inTimeCell.textContent = '記録なし';
+                    }
+                    
+                    // 退室情報
+                    const outNameCell = document.createElement('td');
+                    outNameCell.textContent = userData.out ? user : '';
+                    
+                    const outTimeCell = document.createElement('td');
+                    outTimeCell.textContent = userData.out || '';
+                    if (!userData.out) {
+                        outTimeCell.classList.add('no-data');
+                        outTimeCell.textContent = '記録なし';
+                    }
+                    
+                    // 操作ボタン
+                    const actionCell = document.createElement('td');
+                    
+                    // 入室編集ボタン（入室記録がある場合のみ）
+                    if (userData.in) {
+                        const editInBtn = document.createElement('button');
+                        editInBtn.className = 'btn btn-sm btn-outline-primary me-1';
+                        editInBtn.innerHTML = '<i class="bi bi-pencil"></i> 入室';
+                        editInBtn.setAttribute('data-record-id', userData.inId);
+                        editInBtn.setAttribute('data-type', 'in');
+                        editInBtn.setAttribute('data-user', user);
+                        editInBtn.setAttribute('data-date', date);
+                        editInBtn.setAttribute('data-time', userData.in);
+                        editInBtn.addEventListener('click', handleEdit);
+                        actionCell.appendChild(editInBtn);
+                    }
+                    
+                    // 退室編集ボタン（退室記録がある場合のみ）
+                    if (userData.out) {
+                        const editOutBtn = document.createElement('button');
+                        editOutBtn.className = 'btn btn-sm btn-outline-secondary me-1';
+                        editOutBtn.innerHTML = '<i class="bi bi-pencil"></i> 退室';
+                        editOutBtn.setAttribute('data-record-id', userData.outId);
+                        editOutBtn.setAttribute('data-type', 'out');
+                        editOutBtn.setAttribute('data-user', user);
+                        editOutBtn.setAttribute('data-date', date);
+                        editOutBtn.setAttribute('data-time', userData.out);
+                        editOutBtn.addEventListener('click', handleEdit);
+                        actionCell.appendChild(editOutBtn);
+                    }
+                    
+                    // 行に追加
+                    row.appendChild(dateCell);
+                    row.appendChild(inNameCell);
+                    row.appendChild(inTimeCell);
+                    row.appendChild(outNameCell);
+                    row.appendChild(outTimeCell);
+                    row.appendChild(actionCell);
+                    
+                    tableBody.appendChild(row);
+                });
             });
-        });
+            
+            // テーブルが空の場合のメッセージ
+            if (sortedDates.length === 0) {
+                const emptyRow = document.createElement('tr');
+                const emptyCell = document.createElement('td');
+                emptyCell.colSpan = 6;
+                emptyCell.textContent = '記録がありません';
+                emptyCell.className = 'text-center py-3';
+                emptyRow.appendChild(emptyCell);
+                tableBody.appendChild(emptyRow);
+            }
+        }
         
-        // 保存ボタンの処理
+        // 編集ボタンのクリックハンドラ
+        function handleEdit(event) {
+            const btn = event.currentTarget;
+            const recordId = btn.getAttribute('data-record-id');
+            const type = btn.getAttribute('data-type');
+            const user = btn.getAttribute('data-user');
+            const date = btn.getAttribute('data-date');
+            const time = btn.getAttribute('data-time');
+            
+            // モーダルフォームにデータをセット
+            document.getElementById('recordId').value = recordId;
+            document.getElementById('editType').value = type;
+            document.getElementById('editUserName').value = user;
+            document.getElementById('editDate').value = date;
+            document.getElementById('editTime').value = time;
+            
+            // モーダルのタイトルを動的に変更
+            document.querySelector('.modal-title').textContent = type === 'in' ? '入室記録の編集' : '退室記録の編集';
+            
+            // モーダルを表示
+            const modal = new bootstrap.Modal(document.getElementById('editModal'));
+            modal.show();
+        }
+        
+        // サーバーから記録を取得する関数
+        function fetchRecords(month) {
+            // この例では、クライアントサイドでフィルタリングするために全データを使用
+            // サーバーサイドでのフィルタリングの場合は、ここでAPIを呼び出す
+            const allRecords = {{ records|tojson }};
+            
+            // 月でフィルタリング（指定された月がなければすべて表示）
+            let filteredRecords = allRecords;
+            if (month) {
+                filteredRecords = allRecords.filter(record => {
+                    return record.timestamp.startsWith(month);
+                });
+            }
+            
+            updateTable(filteredRecords);
+        }
+        
+        // 保存ボタンのクリックハンドラ
         document.getElementById('saveChanges').addEventListener('click', function() {
             const recordId = document.getElementById('recordId').value;
-            const userName = document.getElementById('editUserName').value;
             const type = document.getElementById('editType').value;
-            const timestamp = document.getElementById('editTimestamp').value;
+            const userName = document.getElementById('editUserName').value;
+            const date = document.getElementById('editDate').value;
+            const time = document.getElementById('editTime').value;
+            
+            // ISO 8601形式のタイムスタンプを作成（YYYY-MM-DDTHH:MM:SS.sssZ）
+            const timestamp = new Date(`${date}T${time}:00`).toISOString();
             
             const formData = new FormData();
             formData.append('userName', userName);
             formData.append('type', type);
-            formData.append('timestamp', new Date(timestamp).toISOString());
+            formData.append('timestamp', timestamp);
             
             fetch(`/api/access/${recordId}`, {
                 method: 'PUT',
@@ -163,28 +306,30 @@
             .then(data => {
                 if (data.success) {
                     window.location.reload();
+                } else {
+                    alert('エラーが発生しました');
                 }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('エラーが発生しました');
             });
         });
         
-        // 削除ボタンの処理
-        document.querySelectorAll('.delete-btn').forEach(button => {
-            button.addEventListener('click', function() {
-                if (confirm('この記録を削除してもよろしいですか？')) {
-                    const row = this.closest('tr');
-                    const recordId = row.getAttribute('data-id');
-                    
-                    fetch(`/api/access/${recordId}`, {
-                        method: 'DELETE'
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            row.remove();
-                        }
-                    });
-                }
-            });
+        // 月フィルターの変更イベント
+        document.getElementById('monthFilter').addEventListener('change', function() {
+            fetchRecords(this.value);
+        });
+        
+        // ページ読み込み時に現在の月を設定して記録を取得
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = (today.getMonth() + 1).toString().padStart(2, '0');
+            const currentMonth = `${year}-${month}`;
+            
+            document.getElementById('monthFilter').value = currentMonth;
+            fetchRecords(currentMonth);
         });
     </script>
 </body>
