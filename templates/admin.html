@@ -14,20 +14,60 @@
             color: #999;
             font-style: italic;
         }
+        .import-export-area {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+        }
     </style>
 </head>
 <body>
     <div class="container mt-4">
-        <div class="card">
+        <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h2>入退室履歴</h2>
                 <div>
-                    <a href="/" class="btn btn-outline-primary me-2">
+                    <a href="/" class="btn btn-outline-primary">
                         <i class="bi bi-house"></i> メインページへ
                     </a>
                 </div>
             </div>
             <div class="card-body">
+                <!-- エクスポート・インポートエリア -->
+                <div class="import-export-area">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h4><i class="bi bi-download"></i> エクスポート</h4>
+                            <div class="d-flex align-items-center">
+                                <div class="me-2">
+                                    <label for="exportMonth" class="form-label mb-0">月を選択:</label>
+                                    <select id="exportMonth" class="form-select">
+                                        <option value="all">全期間</option>
+                                        <!-- 月のオプションはJavaScriptで動的に生成 -->
+                                    </select>
+                                </div>
+                                <button id="exportButton" class="btn btn-primary mt-2">
+                                    <i class="bi bi-file-earmark-excel"></i> CSVエクスポート
+                                </button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h4><i class="bi bi-upload"></i> インポート</h4>
+                            <form id="importForm" enctype="multipart/form-data">
+                                <div class="mb-2">
+                                    <input type="file" id="importFile" class="form-control" accept=".csv" required>
+                                    <div class="form-text">CSVフォーマット: 日付,名前,種類(in/out),時間</div>
+                                </div>
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-file-earmark-arrow-up"></i> CSVインポート
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="mb-3 d-flex align-items-center">
                     <label for="monthFilter" class="form-label me-2 mb-0">月を選択:</label>
                     <input type="month" id="monthFilter" class="form-control" style="max-width: 200px;">
@@ -83,6 +123,43 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
                     <button type="button" class="btn btn-primary" id="saveChanges">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- インポート確認モーダル -->
+    <div class="modal fade" id="importConfirmModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">インポート確認</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>以下のデータをインポートします。内容を確認してください。</p>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>日付</th>
+                                    <th>名前</th>
+                                    <th>種類</th>
+                                    <th>時間</th>
+                                </tr>
+                            </thead>
+                            <tbody id="importPreviewTable">
+                                <!-- ここにインポートプレビューが表示されます -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="importWarning" class="alert alert-warning d-none">
+                        重複の可能性があるデータが含まれています。インポートすると上書きされる可能性があります。
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
+                    <button type="button" class="btn btn-primary" id="confirmImport">インポートを実行</button>
                 </div>
             </div>
         </div>
@@ -265,6 +342,241 @@
             modal.show();
         }
         
+        // 利用可能な月のリストを取得・設定する関数
+        function setupAvailableMonths(records) {
+            // すべての記録から月のリストを生成
+            const months = new Set();
+            records.forEach(record => {
+                const month = record.timestamp.substring(0, 7); // YYYY-MM形式
+                months.add(month);
+            });
+            
+            // 月を降順にソート
+            const sortedMonths = Array.from(months).sort().reverse();
+            
+            // エクスポート用のセレクトボックスを更新
+            const exportSelect = document.getElementById('exportMonth');
+            // 既存のオプションをクリア（最初のオプションは保持）
+            while (exportSelect.options.length > 1) {
+                exportSelect.remove(1);
+            }
+            
+            // 月のオプションを追加
+            sortedMonths.forEach(month => {
+                const [year, monthNum] = month.split('-');
+                const option = document.createElement('option');
+                option.value = month;
+                option.textContent = `${year}年${parseInt(monthNum)}月`;
+                exportSelect.appendChild(option);
+            });
+            
+            return sortedMonths;
+        }
+        
+        // CSVファイルをエクスポートする関数
+        function exportToCSV(records, month) {
+            // 月でフィルタリング（「all」の場合はフィルタリングしない）
+            let filteredRecords = records;
+            if (month !== 'all') {
+                filteredRecords = records.filter(record => record.timestamp.startsWith(month));
+            }
+            
+            // CSVヘッダー
+            let csvContent = "日付,名前,種類,時間,ID\n";
+            
+            // レコードをCSV形式に変換
+            filteredRecords.forEach(record => {
+                const timestamp = new Date(record.timestamp);
+                const date = timestamp.toISOString().split('T')[0]; // YYYY-MM-DD
+                const time = timestamp.toTimeString().split(' ')[0].substring(0, 5); // HH:MM
+                const type = record.type === 'in' ? '入室' : '退室';
+                
+                // CSVに行を追加（カンマを含む可能性のあるフィールドはダブルクォートで囲む）
+                csvContent += `${date},"${record.userName}",${type},${time},${record.id}\n`;
+            });
+            
+            // BOMを追加してUTF-8であることを明示
+            const BOM = new Uint8Array([0xEF, 0xBB, 0xBF]);
+            const blob = new Blob([BOM, csvContent], { type: 'text/csv;charset=utf-8;' });
+            
+            // ダウンロードリンクを作成して自動クリック
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            
+            // ファイル名を設定
+            let fileName = "入退室記録";
+            if (month !== 'all') {
+                const [year, monthNum] = month.split('-');
+                fileName += `_${year}年${monthNum}月`;
+            }
+            fileName += ".csv";
+            
+            link.setAttribute('href', url);
+            link.setAttribute('download', fileName);
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        // CSVファイルを解析してインポート用データに変換する関数
+        function parseCSVForImport(csv) {
+            // BOMを削除
+            let content = csv.replace(/^\uFEFF/, '');
+            
+            // 行に分割
+            const rows = content.split(/\r?\n/);
+            const header = rows[0].split(',');
+            
+            // ヘッダーから各列のインデックスを特定
+            const dateIndex = header.findIndex(h => h.trim() === '日付');
+            const nameIndex = header.findIndex(h => h.trim() === '名前');
+            const typeIndex = header.findIndex(h => h.trim() === '種類');
+            const timeIndex = header.findIndex(h => h.trim() === '時間');
+            const idIndex = header.findIndex(h => h.trim() === 'ID');
+            
+            // ヘッダーがないか、必須の列がない場合はエラー
+            if (dateIndex === -1 || nameIndex === -1 || typeIndex === -1 || timeIndex === -1) {
+                throw new Error('CSVフォーマットが正しくありません。日付、名前、種類、時間の列が必要です。');
+            }
+            
+            // 各行を解析
+            const records = [];
+            for (let i = 1; i < rows.length; i++) {
+                if (!rows[i].trim()) continue; // 空行はスキップ
+                
+                // カンマを含む文字列（ダブルクォートで囲まれた部分）を適切に処理
+                const values = [];
+                let inQuotes = false;
+                let currentValue = '';
+                
+                for (let j = 0; j < rows[i].length; j++) {
+                    const char = rows[i][j];
+                    
+                    if (char === '"') {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        values.push(currentValue);
+                        currentValue = '';
+                    } else {
+                        currentValue += char;
+                    }
+                }
+                values.push(currentValue); // 最後の値
+                
+                // 日付と時間を組み合わせてISOタイムスタンプを作成
+                let date = values[dateIndex].trim();
+                const time = values[timeIndex].trim();
+                
+                // 入室/退室の種類を変換
+                let type = values[typeIndex].trim();
+                if (type === '入室') type = 'in';
+                else if (type === '退室') type = 'out';
+                else if (type !== 'in' && type !== 'out') {
+                    throw new Error(`行 ${i}: 種類は「入室」または「退室」である必要があります`);
+                }
+                
+                // 名前からダブルクォートを除去
+                let name = values[nameIndex].trim().replace(/^"(.*)"$/, '$1');
+                
+                // IDがある場合は使用、ない場合は新しく生成
+                const id = idIndex !== -1 && values[idIndex] ? values[idIndex].trim() : null;
+                
+                // レコードオブジェクトを作成
+                records.push({
+                    date,
+                    name,
+                    type,
+                    time,
+                    id
+                });
+            }
+            
+            return records;
+        }
+        
+        // インポートプレビューテーブルを更新する関数
+        function updateImportPreview(importData) {
+            const previewTable = document.getElementById('importPreviewTable');
+            previewTable.innerHTML = '';
+            
+            // 最大10行まで表示
+            const maxPreviewRows = Math.min(importData.length, 10);
+            
+            for (let i = 0; i < maxPreviewRows; i++) {
+                const record = importData[i];
+                const row = document.createElement('tr');
+                
+                // 各列を追加
+                const dateCell = document.createElement('td');
+                dateCell.textContent = record.date;
+                row.appendChild(dateCell);
+                
+                const nameCell = document.createElement('td');
+                nameCell.textContent = record.name;
+                row.appendChild(nameCell);
+                
+                const typeCell = document.createElement('td');
+                typeCell.textContent = record.type === 'in' ? '入室' : '退室';
+                row.appendChild(typeCell);
+                
+                const timeCell = document.createElement('td');
+                timeCell.textContent = record.time;
+                row.appendChild(timeCell);
+                
+                previewTable.appendChild(row);
+            }
+            
+            // 表示行数が全体より少ない場合の注記
+            if (importData.length > maxPreviewRows) {
+                const noteRow = document.createElement('tr');
+                const noteCell = document.createElement('td');
+                noteCell.colSpan = 4;
+                noteCell.textContent = `他 ${importData.length - maxPreviewRows} 件のデータがあります`;
+                noteCell.className = 'text-center text-muted';
+                noteRow.appendChild(noteCell);
+                previewTable.appendChild(noteRow);
+            }
+        }
+        
+        // CSVデータをサーバーに送信してインポートする関数
+        function importCSVData(importData) {
+            // サーバーに送信するため、各レコードをタイムスタンプ形式に変換
+            const records = importData.map(item => {
+                // ISOタイムスタンプを作成
+                const timestamp = new Date(`${item.date}T${item.time}:00`).toISOString();
+                
+                return {
+                    id: item.id, // IDがnullの場合は新規記録としてサーバーで生成
+                    userName: item.name,
+                    type: item.type,
+                    timestamp
+                };
+            });
+            
+            // サーバーに送信
+            fetch('/api/import-records', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ records })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`${data.imported}件のデータをインポートしました`);
+                    window.location.reload();
+                } else {
+                    alert('インポート中にエラーが発生しました: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('インポート中にエラーが発生しました');
+            });
+        }
+        
         // サーバーから記録を取得する関数
         function fetchRecords(month) {
             // この例では、クライアントサイドでフィルタリングするために全データを使用
@@ -279,8 +591,73 @@
                 });
             }
             
+            // 利用可能な月のリストを設定
+            setupAvailableMonths(allRecords);
+            
+            // テーブルを更新
             updateTable(filteredRecords);
+            
+            return allRecords;
         }
+        
+        // グローバル変数として全レコードを保持
+        let globalRecords = [];
+        
+        // ページ読み込み時に現在の月を設定して記録を取得
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = (today.getMonth() + 1).toString().padStart(2, '0');
+            const currentMonth = `${year}-${month}`;
+            
+            document.getElementById('monthFilter').value = currentMonth;
+            globalRecords = fetchRecords(currentMonth);
+            
+            // エクスポートボタンのイベント
+            document.getElementById('exportButton').addEventListener('click', function() {
+                const selectedMonth = document.getElementById('exportMonth').value;
+                exportToCSV(globalRecords, selectedMonth);
+            });
+            
+            // インポートフォームのイベント
+            document.getElementById('importForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const fileInput = document.getElementById('importFile');
+                const file = fileInput.files[0];
+                
+                if (file) {
+                    const reader = new FileReader();
+                    
+                    reader.onload = function(event) {
+                        try {
+                            // CSVを解析
+                            const importData = parseCSVForImport(event.target.result);
+                            
+                            // インポートプレビューを更新
+                            updateImportPreview(importData);
+                            
+                            // 確認モーダルを表示
+                            const importModal = new bootstrap.Modal(document.getElementById('importConfirmModal'));
+                            importModal.show();
+                            
+                            // 確認ボタンのイベント
+                            document.getElementById('confirmImport').onclick = function() {
+                                importCSVData(importData);
+                                importModal.hide();
+                            };
+                            
+                        } catch (error) {
+                            alert('CSVの解析に失敗しました: ' + error.message);
+                        }
+                    };
+                    
+                    reader.readAsText(file, 'UTF-8');
+                } else {
+                    alert('ファイルを選択してください');
+                }
+            });
+        });
         
         // 保存ボタンのクリックハンドラ
         document.getElementById('saveChanges').addEventListener('click', function() {
@@ -290,7 +667,7 @@
             const date = document.getElementById('editDate').value;
             const time = document.getElementById('editTime').value;
             
-            // ISO 8601形式のタイムスタンプを作成（YYYY-MM-DDTHH:MM:SS.sssZ）
+            // ISO 8601形式のタイムスタンプを作成（YYYY-MM-DDTHH:MM:SSZ）
             const timestamp = new Date(`${date}T${time}:00`).toISOString();
             
             const formData = new FormData();
@@ -319,17 +696,6 @@
         // 月フィルターの変更イベント
         document.getElementById('monthFilter').addEventListener('change', function() {
             fetchRecords(this.value);
-        });
-        
-        // ページ読み込み時に現在の月を設定して記録を取得
-        document.addEventListener('DOMContentLoaded', function() {
-            const today = new Date();
-            const year = today.getFullYear();
-            const month = (today.getMonth() + 1).toString().padStart(2, '0');
-            const currentMonth = `${year}-${month}`;
-            
-            document.getElementById('monthFilter').value = currentMonth;
-            fetchRecords(currentMonth);
         });
     </script>
 </body>
