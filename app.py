@@ -28,6 +28,49 @@ app.secret_key = 'your_secret_key'  # セッション管理用の秘密鍵（実
 # データを保存するJSONファイルのパス
 DATA_FILE = 'access_records.json'
 
+# ヘルスチェック用エンドポイント（追加）
+@app.route('/health')
+def health_check():
+    """アプリの状態を確認するためのヘルスチェックエンドポイント"""
+    try:
+        firebase_status = "利用可能" if FIREBASE_AVAILABLE else "利用不可"
+        
+        # Firebaseテスト接続
+        firebase_connection = False
+        if FIREBASE_AVAILABLE:
+            try:
+                db = initialize_firebase()
+                firebase_connection = True
+            except Exception as e:
+                firebase_connection = f"エラー: {str(e)}"
+        
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "firebase_available": FIREBASE_AVAILABLE,
+            "firebase_status": firebase_status,
+            "firebase_connection": firebase_connection,
+            "data_file_exists": os.path.exists(DATA_FILE)
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+# 簡単な応答確認用エンドポイント（追加）
+@app.route('/ping')
+def ping():
+    """簡単な応答確認用"""
+    return jsonify({
+        "message": "pong",
+        "timestamp": datetime.now().isoformat(),
+        "status": "running"
+    })
+
+# 既存のルートはそのまま...
+
 # JSONファイルからデータを読み込む関数
 def load_data(use_firebase=None):
     if use_firebase is None:
@@ -426,20 +469,6 @@ def export_records():
     
     return response
 
-# ヘルスチェック用エンドポイント
-@app.route('/health')
-def health_check():
-    return jsonify({
-        "status": "healthy",
-        "firebase": FIREBASE_AVAILABLE,
-        "timestamp": datetime.now().isoformat()
-    })
-
-# ルートパスでも簡単なレスポンス
-@app.route('/ping')
-def ping():
-    return "pong"
-
 if __name__ == '__main__':
     # ローカル環境での実行
     app.run(debug=True, host='0.0.0.0', port=5000)
@@ -448,12 +477,14 @@ else:
     import os
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_secret_key')
     
-    # Firebaseの初期化をテスト
+    # 起動時にFirebaseをテスト
     try:
         if FIREBASE_AVAILABLE:
-            from firebase_dp import initialize_firebase
+            print("Firebase接続をテスト中...")
             db = initialize_firebase()
-            app.logger.info("Firebase接続成功")
+            print("Firebase接続成功！")
+        else:
+            print("Firebase利用不可 - ローカルファイルモードで動作")
     except Exception as e:
-        app.logger.error(f"Firebase接続エラー（ローカルファイルを使用）: {str(e)}")
+        print(f"Firebase接続エラー - ローカルファイルモードで動作: {str(e)}")
         FIREBASE_AVAILABLE = False
