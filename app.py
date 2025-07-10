@@ -5,6 +5,7 @@ from datetime import datetime
 import uuid
 import csv
 from io import StringIO
+import pytz  # タイムゾーン処理用に追加
 
 # Firebase統合用のインポート
 try:
@@ -28,6 +29,17 @@ app.secret_key = 'your_secret_key'  # セッション管理用の秘密鍵（実
 # データを保存するJSONファイルのパス
 DATA_FILE = 'access_records.json'
 
+# 日本時間のタイムゾーンを設定
+JST = pytz.timezone('Asia/Tokyo')
+
+# 日本時間の現在時刻を取得する関数
+def get_jst_now():
+    """日本時間の現在時刻を取得"""
+    utc_now = datetime.utcnow()
+    utc_now = pytz.utc.localize(utc_now)
+    jst_now = utc_now.astimezone(JST)
+    return jst_now
+
 # ヘルスチェック用エンドポイント（追加）
 @app.route('/health')
 def health_check():
@@ -44,9 +56,14 @@ def health_check():
             except Exception as e:
                 firebase_connection = f"エラー: {str(e)}"
         
+        # 日本時間の現在時刻を表示
+        current_jst = get_jst_now()
+        
         return jsonify({
             "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp_utc": datetime.utcnow().isoformat(),
+            "timestamp_jst": current_jst.isoformat(),
+            "current_jst_readable": current_jst.strftime('%Y年%m月%d日 %H:%M:%S'),
             "firebase_available": FIREBASE_AVAILABLE,
             "firebase_status": firebase_status,
             "firebase_connection": firebase_connection,
@@ -56,20 +73,21 @@ def health_check():
         return jsonify({
             "status": "error",
             "error": str(e),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.utcnow().isoformat()
         }), 500
 
 # 簡単な応答確認用エンドポイント（追加）
 @app.route('/ping')
 def ping():
     """簡単な応答確認用"""
+    current_jst = get_jst_now()
     return jsonify({
         "message": "pong",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp_utc": datetime.utcnow().isoformat(),
+        "timestamp_jst": current_jst.isoformat(),
+        "current_jst_readable": current_jst.strftime('%Y年%m月%d日 %H:%M:%S'),
         "status": "running"
     })
-
-# 既存のルートはそのまま...
 
 # JSONファイルからデータを読み込む関数
 def load_data(use_firebase=None):
@@ -215,9 +233,14 @@ def main():
     # Firebase使用状況を表示用に追加
     firebase_status = "Firebase連携中" if session.get('use_firebase', False) else "ローカル保存"
     
+    # 現在の日本時間を表示用に取得
+    current_jst = get_jst_now()
+    current_time_display = current_jst.strftime('%Y年%m月%d日 %H:%M')
+    
     return render_template('main.html', 
                          user_name=session['user_name'],
-                         firebase_status=firebase_status)
+                         firebase_status=firebase_status,
+                         current_time=current_time_display)
 
 # 入室・退室の記録を保存するAPI
 @app.route('/api/access', methods=['POST'])
@@ -229,21 +252,23 @@ def record_access():
     use_firebase = session.get('use_firebase', False)
     access_type = request.form.get('type')  # 'in' または 'out'
     
-    # 新しい記録を作成
+    # 新しい記録を作成（日本時間を使用）
     record_id = str(uuid.uuid4())
+    jst_now = get_jst_now()
+    
     record = {
         "id": record_id,
         "userId": session['user_id'],
         "userName": session['user_name'],
         "type": access_type,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": jst_now.isoformat()  # 日本時間のISO形式
     }
     
     if use_firebase and FIREBASE_AVAILABLE:
         try:
             # Firebaseに記録を追加
             firebase_add_record(record)
-            app.logger.info(f"Firebase記録保存成功: {record['userName']} - {record['type']}")
+            app.logger.info(f"Firebase記録保存成功: {record['userName']} - {record['type']} - {jst_now.strftime('%H:%M:%S')}")
         except Exception as e:
             app.logger.error(f"Firebase記録エラー: {str(e)}")
             # Firebaseエラーの場合はローカルにフォールバック
@@ -256,9 +281,13 @@ def record_access():
             data["records"] = []
         data["records"].append(record)
         save_data(data, use_firebase=False)
-        app.logger.info(f"ローカル記録保存: {record['userName']} - {record['type']}")
+        app.logger.info(f"ローカル記録保存: {record['userName']} - {record['type']} - {jst_now.strftime('%H:%M:%S')}")
     
-    return jsonify({"success": True})
+    return jsonify({
+        "success": True,
+        "timestamp_jst": jst_now.strftime('%Y年%m月%d日 %H:%M:%S'),
+        "type_text": "入室" if access_type == "in" else "退室"
+    })
 
 # 管理ページ
 @app.route('/admin')
@@ -368,6 +397,25 @@ def import_records():
         use_firebase = session.get('use_firebase', False)
         imported_count = 0
         
+        # インポートするレコードのタイムゾーンを確認・修正
+        for record in records:
+            if 'timestamp' in record:
+                # タイムスタンプを日本時間として解釈
+                try:
+                    # ISO形式のタイムスタンプをパース
+                    dt = datetime.fromisoformat(record['timestamp'].replace('Z', '+00:00'))
+                    
+                    # タイムゾーン情報がない場合は日本時間として扱う
+                    if dt.tzinfo is None:
+                        dt = JST.localize(dt)
+                    
+                    # ISO形式で保存
+                    record['timestamp'] = dt.isoformat()
+                except Exception as e:
+                    app.logger.error(f"タイムスタンプ変換エラー: {str(e)}")
+                    # エラーの場合は現在の日本時間を使用
+                    record['timestamp'] = get_jst_now().isoformat()
+        
         if use_firebase and FIREBASE_AVAILABLE:
             try:
                 # Firebaseにインポート
@@ -447,12 +495,31 @@ def export_records():
     
     # レコードを書き込み
     for record in records:
-        timestamp = datetime.fromisoformat(record["timestamp"])
-        date = timestamp.strftime('%Y-%m-%d')
-        time = timestamp.strftime('%H:%M')
-        type_text = '入室' if record["type"] == 'in' else '退室'
-        
-        writer.writerow([date, record["userName"], type_text, time, record["id"]])
+        try:
+            # タイムスタンプを日本時間として解釈
+            timestamp_str = record["timestamp"]
+            if timestamp_str.endswith('Z'):
+                # UTC時間の場合は日本時間に変換
+                dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                dt = dt.astimezone(JST)
+            else:
+                # ISO形式のタイムスタンプをパース
+                dt = datetime.fromisoformat(timestamp_str)
+                if dt.tzinfo is None:
+                    # タイムゾーン情報がない場合は日本時間として扱う
+                    dt = JST.localize(dt)
+                else:
+                    # 日本時間に変換
+                    dt = dt.astimezone(JST)
+            
+            date = dt.strftime('%Y-%m-%d')
+            time = dt.strftime('%H:%M')
+            type_text = '入室' if record["type"] == 'in' else '退室'
+            
+            writer.writerow([date, record["userName"], type_text, time, record["id"]])
+        except Exception as e:
+            app.logger.error(f"CSV出力エラー: {str(e)} - Record: {record}")
+            continue
     
     # CSVデータを送信
     csv_data = output.getvalue()
@@ -488,3 +555,7 @@ else:
     except Exception as e:
         print(f"Firebase接続エラー - ローカルファイルモードで動作: {str(e)}")
         FIREBASE_AVAILABLE = False
+    
+    # 日本時間での起動メッセージ
+    current_jst = get_jst_now()
+    print(f"アプリケーション起動: {current_jst.strftime('%Y年%m月%d日 %H:%M:%S')} JST")
