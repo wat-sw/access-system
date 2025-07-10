@@ -21,14 +21,85 @@
             background-color: #f8f9fa;
             border: 1px solid #ddd;
         }
+        .csv-preview {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #f8f9fa;
+            font-family: monospace;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
     <div class="container mt-4">
+        <!-- CSV インポート・エクスポート エリア -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4><i class="bi bi-file-earmark-arrow-up-down"></i> CSV データ管理</h4>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <!-- CSVエクスポート -->
+                    <div class="col-md-6">
+                        <h5><i class="bi bi-download"></i> CSVエクスポート</h5>
+                        <div class="mb-3">
+                            <label for="exportMonth" class="form-label">エクスポート期間:</label>
+                            <select id="exportMonth" class="form-control">
+                                <option value="all">すべての記録</option>
+                                <option value="2025-07">2025年7月</option>
+                                <option value="2025-06">2025年6月</option>
+                                <option value="2025-05">2025年5月</option>
+                                <option value="2025-04">2025年4月</option>
+                                <option value="2025-03">2025年3月</option>
+                                <option value="2025-02">2025年2月</option>
+                                <option value="2025-01">2025年1月</option>
+                            </select>
+                        </div>
+                        <button id="exportBtn" class="btn btn-success">
+                            <i class="bi bi-download"></i> CSVをダウンロード
+                        </button>
+                    </div>
+                    
+                    <!-- CSVインポート -->
+                    <div class="col-md-6">
+                        <h5><i class="bi bi-upload"></i> CSVインポート</h5>
+                        <div class="mb-3">
+                            <label for="csvFile" class="form-label">CSVファイルを選択:</label>
+                            <input type="file" id="csvFile" class="form-control" accept=".csv" />
+                        </div>
+                        <button id="importBtn" class="btn btn-primary" disabled>
+                            <i class="bi bi-upload"></i> CSVをインポート
+                        </button>
+                        <div id="csvPreview" class="csv-preview" style="display: none;">
+                            <strong>プレビュー:</strong>
+                            <div id="csvContent"></div>
+                        </div>
+                        <div id="importStatus" class="mt-2"></div>
+                    </div>
+                </div>
+                
+                <!-- CSV形式の説明 -->
+                <div class="mt-4">
+                    <h6><i class="bi bi-info-circle"></i> CSV形式について</h6>
+                    <p class="text-muted small">
+                        <strong>エクスポート形式:</strong> 日付, 名前, 種類, 時間, ID<br>
+                        <strong>インポート形式:</strong> 日付, 名前, 種類, 時間 (IDは自動生成)<br>
+                        <strong>種類:</strong> 「入室」または「退室」<br>
+                        <strong>例:</strong> 2025-07-10, 山田太郎, 入室, 09:00
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 入退室履歴 -->
         <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h2>入退室履歴</h2>
                 <div>
+                    <span id="recordCount" class="badge bg-secondary me-2">記録数: 0</span>
                     <a href="/" class="btn btn-outline-primary">
                         <i class="bi bi-house"></i> メインページへ
                     </a>
@@ -97,6 +168,145 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // グローバル変数
+        let globalRecords = [];
+        
+        // CSV関連の機能
+        
+        // CSVエクスポート機能
+        document.getElementById('exportBtn').addEventListener('click', function() {
+            const month = document.getElementById('exportMonth').value;
+            const url = month === 'all' ? '/api/export-records' : `/api/export-records?month=${month}`;
+            
+            // ダウンロード用のリンクを作成
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `access_records_${month}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+        
+        // CSVファイル選択時の処理
+        document.getElementById('csvFile').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            const importBtn = document.getElementById('importBtn');
+            const csvPreview = document.getElementById('csvPreview');
+            const csvContent = document.getElementById('csvContent');
+            
+            if (file && file.type === 'text/csv') {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const csvText = e.target.result;
+                    const lines = csvText.split('\n').slice(0, 5); // 最初の5行をプレビュー
+                    
+                    csvContent.innerHTML = lines.map(line => `<div>${line}</div>`).join('');
+                    csvPreview.style.display = 'block';
+                    importBtn.disabled = false;
+                };
+                reader.readAsText(file);
+            } else {
+                csvPreview.style.display = 'none';
+                importBtn.disabled = true;
+                alert('CSVファイルを選択してください。');
+            }
+        });
+        
+        // CSVインポート機能
+        document.getElementById('importBtn').addEventListener('click', function() {
+            const fileInput = document.getElementById('csvFile');
+            const file = fileInput.files[0];
+            const statusDiv = document.getElementById('importStatus');
+            
+            if (!file) {
+                alert('ファイルを選択してください。');
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const csvText = e.target.result;
+                    const records = parseCSV(csvText);
+                    
+                    if (records.length === 0) {
+                        throw new Error('有効なデータが見つかりません。');
+                    }
+                    
+                    // サーバーに送信
+                    fetch('/api/import-records', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ records: records })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            statusDiv.innerHTML = `<div class="alert alert-success">✅ ${data.imported}件のデータをインポートしました！</div>`;
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 2000);
+                        } else {
+                            statusDiv.innerHTML = `<div class="alert alert-danger">❌ エラー: ${data.error}</div>`;
+                        }
+                    })
+                    .catch(error => {
+                        statusDiv.innerHTML = `<div class="alert alert-danger">❌ インポートエラー: ${error.message}</div>`;
+                    });
+                    
+                } catch (error) {
+                    statusDiv.innerHTML = `<div class="alert alert-danger">❌ CSVの解析エラー: ${error.message}</div>`;
+                }
+            };
+            reader.readAsText(file);
+        });
+        
+        // CSV解析関数
+        function parseCSV(csvText) {
+            const lines = csvText.split('\n').filter(line => line.trim());
+            const records = [];
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                
+                // CSVを解析（カンマ区切り）
+                const values = line.split(',').map(v => v.trim().replace(/"/g, ''));
+                
+                if (values.length >= 4) {
+                    const [date, userName, type, time] = values;
+                    
+                    // データの検証
+                    if (!date || !userName || !type || !time) continue;
+                    
+                    // 種類の変換
+                    let recordType;
+                    if (type === '入室' || type === 'in') {
+                        recordType = 'in';
+                    } else if (type === '退室' || type === 'out') {
+                        recordType = 'out';
+                    } else {
+                        continue; // 無効な種類はスキップ
+                    }
+                    
+                    // タイムスタンプの作成
+                    const timestamp = new Date(`${date}T${time}:00`).toISOString();
+                    
+                    records.push({
+                        userName: userName,
+                        type: recordType,
+                        timestamp: timestamp
+                    });
+                }
+            }
+            
+            return records;
+        }
+        
+        // 既存の履歴管理機能
+        
         // 履歴データを日付ごとにグループ化する関数
         function processRecords(records) {
             const dateUserMap = {};
@@ -138,7 +348,10 @@
         function updateTable(records) {
             const { dateUserMap, sortedDates } = processRecords(records);
             const tableBody = document.getElementById('recordsTable');
+            const recordCount = document.getElementById('recordCount');
+            
             tableBody.innerHTML = '';
+            recordCount.textContent = `記録数: ${records.length}`;
             
             let rowClass = '';
             
@@ -315,9 +528,6 @@
             return allRecords;
         }
         
-        // グローバル変数として全レコードを保持
-        let globalRecords = [];
-        
         // ページ読み込み時
         document.addEventListener('DOMContentLoaded', function() {
             const today = new Date();
@@ -327,6 +537,9 @@
             
             document.getElementById('monthFilter').value = currentMonth;
             globalRecords = fetchRecords(currentMonth);
+            
+            // エクスポート月のデフォルト値も設定
+            document.getElementById('exportMonth').value = currentMonth;
         });
         
         // 保存ボタンのクリックハンドラ
