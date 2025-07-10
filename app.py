@@ -426,6 +426,20 @@ def export_records():
     
     return response
 
+# ヘルスチェック用エンドポイント
+@app.route('/health')
+def health_check():
+    return jsonify({
+        "status": "healthy",
+        "firebase": FIREBASE_AVAILABLE,
+        "timestamp": datetime.now().isoformat()
+    })
+
+# ルートパスでも簡単なレスポンス
+@app.route('/ping')
+def ping():
+    return "pong"
+
 if __name__ == '__main__':
     # ローカル環境での実行
     app.run(debug=True, host='0.0.0.0', port=5000)
