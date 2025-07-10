@@ -433,3 +433,13 @@ else:
     # 本番環境（Render）でも動作するように
     import os
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_secret_key')
+    
+    # Firebaseの初期化をテスト
+    try:
+        if FIREBASE_AVAILABLE:
+            from firebase_dp import initialize_firebase
+            db = initialize_firebase()
+            app.logger.info("Firebase接続成功")
+    except Exception as e:
+        app.logger.error(f"Firebase接続エラー（ローカルファイルを使用）: {str(e)}")
+        FIREBASE_AVAILABLE = False
