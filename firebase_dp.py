@@ -10,34 +10,48 @@ load_dotenv()
 # Firebase の初期化
 def initialize_firebase():
     """Firebase Admin SDK を初期化して Firestore クライアントを返します"""
-    if not firebase_admin._apps:
-        # 環境変数から認証情報を取得
-        cred_path = os.environ.get('FIREBASE_CREDENTIALS')
-        project_id = os.environ.get('FIREBASE_PROJECT_ID')
-        
-        # 本番環境（Firebase）の場合
-        if cred_path and os.path.exists(cred_path):
-            cred = credentials.Certificate(cred_path)
-            firebase_admin.initialize_app(cred, {
-                'projectId': project_id,
-            })
-        else:
-            # 環境変数にJSONが直接設定されている場合（Render等のサービス用）
-            cred_json = os.environ.get('FIREBASE_CREDENTIALS_JSON')
-            if cred_json:
-                try:
-                    service_account_info = json.loads(cred_json)
-                    cred = credentials.Certificate(service_account_info)
-                    firebase_admin.initialize_app(cred, {
-                        'projectId': project_id,
-                    })
-                except json.JSONDecodeError:
-                    raise ValueError("FIREBASE_CREDENTIALS_JSON 環境変数が正しいJSON形式ではありません")
+    try:
+        if not firebase_admin._apps:
+            # 環境変数から認証情報を取得
+            cred_path = os.environ.get('FIREBASE_CREDENTIALS')
+            project_id = os.environ.get('FIREBASE_PROJECT_ID')
+            
+            print(f"Firebase初期化開始 - project_id: {project_id}")
+            
+            # 本番環境（Firebase）の場合
+            if cred_path and os.path.exists(cred_path):
+                print("認証ファイルパスを使用")
+                cred = credentials.Certificate(cred_path)
+                firebase_admin.initialize_app(cred, {
+                    'projectId': project_id,
+                })
             else:
-                raise ValueError("Firebase 認証情報が見つかりません")
-    
-    # Firestore クライアントを取得
-    return firestore.client()
+                # 環境変数にJSONが直接設定されている場合（Render等のサービス用）
+                cred_json = os.environ.get('FIREBASE_CREDENTIALS_JSON')
+                if cred_json:
+                    print("環境変数のJSONを使用")
+                    try:
+                        service_account_info = json.loads(cred_json)
+                        cred = credentials.Certificate(service_account_info)
+                        firebase_admin.initialize_app(cred, {
+                            'projectId': project_id,
+                        })
+                        print("Firebase初期化成功")
+                    except json.JSONDecodeError as e:
+                        print(f"JSON解析エラー: {str(e)}")
+                        raise ValueError("FIREBASE_CREDENTIALS_JSON 環境変数が正しいJSON形式ではありません")
+                else:
+                    print("Firebase認証情報が見つかりません")
+                    raise ValueError("Firebase 認証情報が見つかりません")
+        
+        # Firestore クライアントを取得
+        client = firestore.client()
+        print("Firestoreクライアント取得成功")
+        return client
+        
+    except Exception as e:
+        print(f"Firebase初期化エラー: {str(e)}")
+        raise e
 
 # データを読み込む関数
 def load_data():
