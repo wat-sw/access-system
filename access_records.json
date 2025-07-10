@@ -1,0 +1,45 @@
+{
+  "records": [
+    {
+      "id": "8488258a-1347-4c01-8340-3c1f1889abb6",
+      "userId": "b3f4bc91-f632-4dfa-9175-0bcf4e9bb656",
+      "userName": "清水",
+      "type": "in",
+      "timestamp": "2025-06-04T17:04:33.333851"
+    },
+    {
+      "id": "0c3f8b6d-5033-4495-b4da-71553812e36c",
+      "userId": "b3f4bc91-f632-4dfa-9175-0bcf4e9bb656",
+      "userName": "清水",
+      "type": "out",
+      "timestamp": "2025-06-04T17:04:34.480922"
+    },
+    {
+      "id": "46446a1d-d694-470d-ae1b-18ad50e7937e",
+      "userId": "b3f4bc91-f632-4dfa-9175-0bcf4e9bb656",
+      "userName": "清水",
+      "type": "in",
+      "timestamp": "2025-06-04T17:21:14.044515"
+    },
+    {
+      "id": "87864bdf-4786-444d-aca0-9e6df1d94bc2",
+      "userId": "b3f4bc91-f632-4dfa-9175-0bcf4e9bb656",
+      "userName": "清水",
+      "type": "out",
+      "timestamp": "2025-06-04T17:21:14.760908"
+    },
+    {
+      "id": "823ae0aa-7576-4f03-8133-00fefcd95d3e",
+      "userId": "b3f4bc91-f632-4dfa-9175-0bcf4e9bb656",
+      "userName": "清水",
+      "type": "out",
+      "timestamp": "2025-06-04T17:24:31.980996"
+    }
+  ],
+  "users": [
+    {
+      "id": "b3f4bc91-f632-4dfa-9175-0bcf4e9bb656",
+      "name": "清水"
+    }
+  ]
+}
