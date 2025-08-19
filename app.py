@@ -16,7 +16,8 @@ try:
         add_record as firebase_add_record,
         update_record as firebase_update_record,
         delete_record as firebase_delete_record,
-        import_records as firebase_import_records
+        import_records as firebase_import_records,
+        test_connection
     )
     FIREBASE_AVAILABLE = True
 except ImportError as e:
@@ -24,13 +25,32 @@ except ImportError as e:
     FIREBASE_AVAILABLE = False
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'  # セッション管理用の秘密鍵（実際の運用では変更してください）
+app.secret_key = os.environ.get('SECRET_KEY', 'your_secret_key_change_in_production')
 
-# データを保存するJSONファイルのパス
+# データを保存するJSONファイルのパス（バックアップ用のみ）
 DATA_FILE = 'access_records.json'
 
 # 日本時間のタイムゾーンを設定
 JST = pytz.timezone('Asia/Tokyo')
+
+# Firebase接続状態をグローバルで管理
+FIREBASE_CONNECTION_OK = False
+
+def initialize_app():
+    """アプリケーション初期化時の処理"""
+    global FIREBASE_CONNECTION_OK
+    
+    if FIREBASE_AVAILABLE:
+        try:
+            print("Firebase接続をテスト中...")
+            test_connection()
+            FIREBASE_CONNECTION_OK = True
+            print("✅ Firebase接続成功！")
+        except Exception as e:
+            print(f"❌ Firebase接続エラー: {str(e)}")
+            FIREBASE_CONNECTION_OK = False
+    else:
+        print("⚠️ Firebase統合が利用できません")
 
 # 日本時間の現在時刻を取得する関数
 def get_jst_now():
@@ -40,35 +60,48 @@ def get_jst_now():
     jst_now = utc_now.astimezone(JST)
     return jst_now
 
-# ヘルスチェック用エンドポイント（追加）
+# データベース接続確認
+def ensure_database_connection():
+    """データベース接続を確認し、接続できない場合はエラーページを表示"""
+    if not FIREBASE_CONNECTION_OK:
+        return render_template('error.html', 
+                             error_title="データベース接続エラー",
+                             error_message="データベースに接続できません。管理者にお問い合わせください。",
+                             firebase_status="接続不可")
+    return None
+
+# ヘルスチェック用エンドポイント（改善版）
 @app.route('/health')
 def health_check():
     """アプリの状態を確認するためのヘルスチェックエンドポイント"""
     try:
-        firebase_status = "利用可能" if FIREBASE_AVAILABLE else "利用不可"
+        firebase_connection_status = "OK" if FIREBASE_CONNECTION_OK else "NG"
         
-        # Firebaseテスト接続
-        firebase_connection = False
+        # Firebase再接続テスト
+        firebase_test_result = "スキップ"
         if FIREBASE_AVAILABLE:
             try:
-                db = initialize_firebase()
-                firebase_connection = True
+                test_connection()
+                firebase_test_result = "成功"
             except Exception as e:
-                firebase_connection = f"エラー: {str(e)}"
+                firebase_test_result = f"失敗: {str(e)}"
         
         # 日本時間の現在時刻を表示
         current_jst = get_jst_now()
         
+        status_code = 200 if FIREBASE_CONNECTION_OK else 503
+        
         return jsonify({
-            "status": "healthy",
+            "status": "healthy" if FIREBASE_CONNECTION_OK else "unhealthy",
             "timestamp_utc": datetime.utcnow().isoformat(),
             "timestamp_jst": current_jst.isoformat(),
             "current_jst_readable": current_jst.strftime('%Y年%m月%d日 %H:%M:%S'),
             "firebase_available": FIREBASE_AVAILABLE,
-            "firebase_status": firebase_status,
-            "firebase_connection": firebase_connection,
-            "data_file_exists": os.path.exists(DATA_FILE)
-        }), 200
+            "firebase_connection": firebase_connection_status,
+            "firebase_test": firebase_test_result,
+            "data_file_exists": os.path.exists(DATA_FILE),
+            "environment": os.environ.get('ENV', 'development')
+        }), status_code
     except Exception as e:
         return jsonify({
             "status": "error",
@@ -76,7 +109,7 @@ def health_check():
             "timestamp": datetime.utcnow().isoformat()
         }), 500
 
-# 簡単な応答確認用エンドポイント（追加）
+# 簡単な応答確認用エンドポイント
 @app.route('/ping')
 def ping():
     """簡単な応答確認用"""
@@ -86,41 +119,53 @@ def ping():
         "timestamp_utc": datetime.utcnow().isoformat(),
         "timestamp_jst": current_jst.isoformat(),
         "current_jst_readable": current_jst.strftime('%Y年%m月%d日 %H:%M:%S'),
-        "status": "running"
+        "status": "running",
+        "firebase_ok": FIREBASE_CONNECTION_OK
     })
 
-# JSONファイルからデータを読み込む関数
-def load_data(use_firebase=None):
-    if use_firebase is None:
-        use_firebase = session.get('use_firebase', False)
-    
-    if use_firebase and FIREBASE_AVAILABLE:
+# JSONファイルからデータを読み込む関数（バックアップ用）
+def load_local_data():
+    """ローカルJSONファイルからデータを読み込む（バックアップ用）"""
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            app.logger.error(f"ローカルファイル読み込みエラー: {str(e)}")
+    return {"records": [], "users": []}
+
+# データを読み込む関数（Firebase優先）
+def load_data():
+    """Firebaseからデータを読み込む（エラー時はローカルファイル）"""
+    if FIREBASE_CONNECTION_OK:
         try:
             return firebase_load_data()
         except Exception as e:
             app.logger.error(f"Firebase読み込みエラー: {str(e)}")
-            # Firebaseでエラーの場合はJSONファイルにフォールバック
+            # 緊急時のみローカルファイルを使用（警告付き）
+            app.logger.warning("緊急時モード: ローカルファイルを使用")
     
-    # JSONファイルからデータを読み込む
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"records": [], "users": []}
+    # ローカルファイルからデータを読み込む（バックアップ）
+    return load_local_data()
 
-# データをJSONファイルに保存する関数
-def save_data(data, use_firebase=None):
-    if use_firebase is None:
-        use_firebase = session.get('use_firebase', False)
-    
-    # JSONファイルに保存する（常にバックアップとして保存）
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    
-    # Firebaseにも保存（個別のレコード操作で行うため、ここでは何もしない）
+# データをバックアップファイルに保存する関数
+def save_backup_data(data):
+    """データをバックアップファイルに保存"""
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        app.logger.info("バックアップファイル保存成功")
+    except Exception as e:
+        app.logger.error(f"バックアップ保存エラー: {str(e)}")
 
 # ログインページ
 @app.route('/', methods=['GET', 'POST'])
 def login():
+    # データベース接続確認
+    db_error = ensure_database_connection()
+    if db_error:
+        return db_error
+    
     # クッキーからユーザー情報を確認（自動ログイン機能）
     if 'user_id' not in session and request.cookies.get('user_id') and request.cookies.get('user_name'):
         session['user_id'] = request.cookies.get('user_id')
@@ -136,35 +181,25 @@ def login():
     if request.method == 'POST':
         # フォームからユーザー名を取得
         user_name = request.form.get('username')
-        remember_me = request.form.get('remember_me') == 'on'  # チェックボックスの値を取得
+        remember_me = request.form.get('remember_me') == 'on'
         
         if user_name and user_name.strip():
             user_id = str(uuid.uuid4())
             
-            # Firebase連携を試みる
-            if FIREBASE_AVAILABLE:
-                try:
-                    user = get_or_create_user(user_name, user_id)
-                    if user:
-                        user_id = user['id']
-                        user_name = user['name']
-                        session['user_id'] = user_id
-                        session['user_name'] = user_name
-                        session['use_firebase'] = True
-                        
-                        app.logger.info(f"Firebase認証成功: {user_name}")
-                    else:
-                        raise Exception("ユーザーの作成/取得に失敗")
-                        
-                except Exception as e:
-                    app.logger.error(f"Firebaseエラー: {str(e)}")
-                    # Firebaseが利用できない場合はJSONファイルを使用
-                    session['use_firebase'] = False
-                    user_id, user_name = handle_local_login(user_name, user_id)
-            else:
-                # Firebaseが利用できない場合はJSONファイルを使用
-                session['use_firebase'] = False
-                user_id, user_name = handle_local_login(user_name, user_id)
+            try:
+                # Firebase経由でユーザー作成/取得
+                user = get_or_create_user(user_name, user_id)
+                if user:
+                    user_id = user['id']
+                    user_name = user['name']
+                    app.logger.info(f"ユーザー認証成功: {user_name}")
+                else:
+                    raise Exception("ユーザーの作成/取得に失敗")
+                    
+            except Exception as e:
+                app.logger.error(f"ユーザー認証エラー: {str(e)}")
+                error = "ログイン処理中にエラーが発生しました。時間をおいて再試行してください。"
+                return render_template('login.html', error=error)
             
             session['user_id'] = user_id
             session['user_name'] = user_name
@@ -174,7 +209,6 @@ def login():
             
             # 「次回から自動的にログイン」がチェックされていればクッキーに保存
             if remember_me:
-                # クッキーの有効期限を30日に設定
                 response.set_cookie('user_id', user_id, max_age=30*24*60*60)
                 response.set_cookie('user_name', user_name, max_age=30*24*60*60)
             
@@ -184,39 +218,12 @@ def login():
     
     return render_template('login.html', error=error)
 
-def handle_local_login(user_name, user_id):
-    """ローカルJSONファイルでのログイン処理"""
-    data = load_data(use_firebase=False)
-    user_exists = False
-    
-    for user in data.get("users", []):
-        if user["name"] == user_name:
-            user_exists = True
-            user_id = user["id"]
-            break
-    
-    # 新規ユーザーの場合は追加
-    if not user_exists:
-        if "users" not in data:
-            data["users"] = []
-        
-        data["users"].append({
-            "id": user_id,
-            "name": user_name
-        })
-        save_data(data, use_firebase=False)
-    
-    return user_id, user_name
-
 # ログアウト
 @app.route('/logout')
 def logout():
-    # セッションからユーザー情報を削除
     session.pop('user_id', None)
     session.pop('user_name', None)
-    session.pop('use_firebase', None)
     
-    # クッキーも削除するためのレスポンスを作成
     response = redirect(url_for('login'))
     response.delete_cookie('user_id')
     response.delete_cookie('user_name')
@@ -226,12 +233,17 @@ def logout():
 # メインページ（入退室ボタンのあるページ）
 @app.route('/main')
 def main():
+    # データベース接続確認
+    db_error = ensure_database_connection()
+    if db_error:
+        return db_error
+        
     # ログインしていない場合はログインページにリダイレクト
     if 'user_id' not in session or 'user_name' not in session:
         return redirect(url_for('login'))
     
     # Firebase使用状況を表示用に追加
-    firebase_status = "Firebase連携中" if session.get('use_firebase', False) else "ローカル保存"
+    firebase_status = "Firebase連携中" if FIREBASE_CONNECTION_OK else "接続エラー"
     
     # 現在の日本時間を表示用に取得
     current_jst = get_jst_now()
@@ -245,11 +257,14 @@ def main():
 # 入室・退室の記録を保存するAPI
 @app.route('/api/access', methods=['POST'])
 def record_access():
+    # データベース接続確認
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"success": False, "error": "データベースに接続できません"})
+        
     # ログインしていない場合はエラー
     if 'user_id' not in session or 'user_name' not in session:
         return jsonify({"success": False, "error": "ログインが必要です"})
     
-    use_firebase = session.get('use_firebase', False)
     access_type = request.form.get('type')  # 'in' または 'out'
     
     # 新しい記録を作成（日本時間を使用）
@@ -261,204 +276,133 @@ def record_access():
         "userId": session['user_id'],
         "userName": session['user_name'],
         "type": access_type,
-        "timestamp": jst_now.isoformat()  # 日本時間のISO形式
+        "timestamp": jst_now.isoformat()
     }
     
-    if use_firebase and FIREBASE_AVAILABLE:
+    try:
+        # Firebaseに記録を追加
+        firebase_add_record(record)
+        app.logger.info(f"記録保存成功: {record['userName']} - {record['type']} - {jst_now.strftime('%H:%M:%S')}")
+        
+        # バックアップファイルにも保存
         try:
-            # Firebaseに記録を追加
-            firebase_add_record(record)
-            app.logger.info(f"Firebase記録保存成功: {record['userName']} - {record['type']} - {jst_now.strftime('%H:%M:%S')}")
-        except Exception as e:
-            app.logger.error(f"Firebase記録エラー: {str(e)}")
-            # Firebaseエラーの場合はローカルにフォールバック
-            use_firebase = False
-    
-    if not use_firebase:
-        # JSONファイルにも記録を保存
-        data = load_data(use_firebase=False)
-        if "records" not in data:
-            data["records"] = []
-        data["records"].append(record)
-        save_data(data, use_firebase=False)
-        app.logger.info(f"ローカル記録保存: {record['userName']} - {record['type']} - {jst_now.strftime('%H:%M:%S')}")
-    
-    return jsonify({
-        "success": True,
-        "timestamp_jst": jst_now.strftime('%Y年%m月%d日 %H:%M:%S'),
-        "type_text": "入室" if access_type == "in" else "退室"
-    })
+            data = load_local_data()
+            if "records" not in data:
+                data["records"] = []
+            data["records"].append(record)
+            save_backup_data(data)
+        except Exception as backup_error:
+            app.logger.warning(f"バックアップ保存エラー: {str(backup_error)}")
+        
+        return jsonify({
+            "success": True,
+            "timestamp_jst": jst_now.strftime('%Y年%m月%d日 %H:%M:%S'),
+            "type_text": "入室" if access_type == "in" else "退室"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"記録保存エラー: {str(e)}")
+        return jsonify({
+            "success": False, 
+            "error": "記録の保存に失敗しました。時間をおいて再試行してください。"
+        })
 
 # 管理ページ
 @app.route('/admin')
 def admin():
-    use_firebase = session.get('use_firebase', False)
-    data = load_data(use_firebase)
-    
-    # 入退室記録を時間の新しい順に並べ替え
-    records = sorted(data.get("records", []), key=lambda x: x["timestamp"], reverse=True)
-    
-    # Firebase使用状況を表示用に追加
-    firebase_status = "Firebase連携中" if use_firebase else "ローカル保存"
-    
-    return render_template('admin.html', 
-                         records=records,
-                         firebase_status=firebase_status)
+    # データベース接続確認
+    db_error = ensure_database_connection()
+    if db_error:
+        return db_error
+        
+    try:
+        data = load_data()
+        records = sorted(data.get("records", []), key=lambda x: x["timestamp"], reverse=True)
+        
+        firebase_status = "Firebase連携中" if FIREBASE_CONNECTION_OK else "接続エラー"
+        
+        return render_template('admin.html', 
+                             records=records,
+                             firebase_status=firebase_status)
+    except Exception as e:
+        app.logger.error(f"管理画面データ読み込みエラー: {str(e)}")
+        return render_template('error.html',
+                             error_title="データ読み込みエラー",
+                             error_message="データの読み込みに失敗しました。",
+                             firebase_status="エラー")
 
 # 記録の編集API
 @app.route('/api/access/<record_id>', methods=['PUT'])
 def update_record(record_id):
-    use_firebase = session.get('use_firebase', False)
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"success": False, "error": "データベースに接続できません"})
     
-    # フォームからデータを取得
-    user_name = request.form.get('userName')
-    access_type = request.form.get('type')
-    timestamp = request.form.get('timestamp')
-    
-    update_data = {
-        "userName": user_name,
-        "type": access_type,
-        "timestamp": timestamp
-    }
-    
-    if use_firebase and FIREBASE_AVAILABLE:
-        try:
-            # Firebaseの記録を更新
-            firebase_update_record(record_id, update_data)
-            app.logger.info(f"Firebase記録更新成功: {record_id}")
-        except Exception as e:
-            app.logger.error(f"Firebase更新エラー: {str(e)}")
-            use_firebase = False
-    
-    if not use_firebase:
-        # JSONファイルの記録を更新
-        data = load_data(use_firebase=False)
-        for record in data.get("records", []):
-            if record["id"] == record_id:
-                record.update(update_data)
-                break
-        save_data(data, use_firebase=False)
-        app.logger.info(f"ローカル記録更新: {record_id}")
-    
-    return jsonify({"success": True})
-
-# 記録の削除API（修正版）
-@app.route('/api/access/<record_id>', methods=['DELETE'])
-def delete_record(record_id):
     try:
-        use_firebase = session.get('use_firebase', False)
-        app.logger.info(f"削除処理開始: record_id={record_id}, use_firebase={use_firebase}")
+        user_name = request.form.get('userName')
+        access_type = request.form.get('type')
+        timestamp = request.form.get('timestamp')
         
-        if use_firebase and FIREBASE_AVAILABLE:
-            try:
-                firebase_delete_record(record_id)
-                app.logger.info(f"Firebase記録削除成功: {record_id}")
-                return jsonify({"success": True, "message": "Firebase記録削除成功"})
-            except Exception as e:
-                app.logger.error(f"Firebase削除エラー: {str(e)}")
-                use_firebase = False
+        update_data = {
+            "userName": user_name,
+            "type": access_type,
+            "timestamp": timestamp
+        }
         
-        # ローカル削除
-        if not use_firebase:
-            data = load_data(use_firebase=False)
-            original_count = len(data.get("records", []))
-            
-            data["records"] = [record for record in data.get("records", []) if record["id"] != record_id]
-            
-            new_count = len(data.get("records", []))
-            deleted_count = original_count - new_count
-            
-            if deleted_count > 0:
-                save_data(data, use_firebase=False)
-                app.logger.info(f"ローカル記録削除成功: {record_id}, 削除件数: {deleted_count}")
-                return jsonify({"success": True, "message": f"記録削除成功（{deleted_count}件）"})
-            else:
-                app.logger.warning(f"削除対象が見つかりません: {record_id}")
-                return jsonify({"success": False, "error": "削除対象の記録が見つかりません"})
+        firebase_update_record(record_id, update_data)
+        app.logger.info(f"記録更新成功: {record_id}")
+        
+        return jsonify({"success": True})
         
     except Exception as e:
-        app.logger.error(f"削除処理エラー: {str(e)}")
-        return jsonify({"success": False, "error": f"削除処理中にエラーが発生しました: {str(e)}"})
+        app.logger.error(f"記録更新エラー: {str(e)}")
+        return jsonify({"success": False, "error": "更新に失敗しました"})
+
+# 記録の削除API
+@app.route('/api/access/<record_id>', methods=['DELETE'])
+def delete_record(record_id):
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"success": False, "error": "データベースに接続できません"})
+        
+    try:
+        firebase_delete_record(record_id)
+        app.logger.info(f"記録削除成功: {record_id}")
+        return jsonify({"success": True, "message": "記録削除成功"})
+        
+    except Exception as e:
+        app.logger.error(f"記録削除エラー: {str(e)}")
+        return jsonify({"success": False, "error": "削除に失敗しました"})
 
 # CSVデータをインポートするAPI
 @app.route('/api/import-records', methods=['POST'])
 def import_records():
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"success": False, "error": "データベースに接続できません"})
+        
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "ログインが必要です"})
     
     try:
-        # JSONデータを取得
         import_data = request.json
         records = import_data.get('records', [])
         
         if not records:
             return jsonify({"success": False, "error": "インポートするデータがありません"})
         
-        use_firebase = session.get('use_firebase', False)
-        imported_count = 0
-        
         # インポートするレコードのタイムゾーンを確認・修正
         for record in records:
             if 'timestamp' in record:
-                # タイムスタンプを日本時間として解釈
                 try:
-                    # ISO形式のタイムスタンプをパース
                     dt = datetime.fromisoformat(record['timestamp'].replace('Z', '+00:00'))
-                    
-                    # タイムゾーン情報がない場合は日本時間として扱う
                     if dt.tzinfo is None:
                         dt = JST.localize(dt)
-                    
-                    # ISO形式で保存
                     record['timestamp'] = dt.isoformat()
                 except Exception as e:
                     app.logger.error(f"タイムスタンプ変換エラー: {str(e)}")
-                    # エラーの場合は現在の日本時間を使用
                     record['timestamp'] = get_jst_now().isoformat()
         
-        if use_firebase and FIREBASE_AVAILABLE:
-            try:
-                # Firebaseにインポート
-                imported_count = firebase_import_records(records)
-                app.logger.info(f"Firebaseインポート成功: {imported_count}件")
-            except Exception as e:
-                app.logger.error(f"Firebaseインポートエラー: {str(e)}")
-                use_firebase = False
-        
-        if not use_firebase:
-            # JSONファイルにインポート
-            data = load_data(use_firebase=False)
-            
-            for record in records:
-                # IDがある場合は既存の記録を更新
-                if 'id' in record and record['id']:
-                    updated = False
-                    for existing_record in data["records"]:
-                        if existing_record["id"] == record["id"]:
-                            existing_record.update(record)
-                            imported_count += 1
-                            updated = True
-                            break
-                    
-                    if not updated:
-                        # 見つからない場合は新規追加
-                        data["records"].append(record)
-                        imported_count += 1
-                else:
-                    # IDがない場合は新規追加
-                    record_id = str(uuid.uuid4())
-                    new_record = {
-                        "id": record_id,
-                        "userId": session.get('user_id', ''),
-                        "userName": record["userName"],
-                        "type": record["type"],
-                        "timestamp": record["timestamp"]
-                    }
-                    data["records"].append(new_record)
-                    imported_count += 1
-            
-            save_data(data, use_firebase=False)
-            app.logger.info(f"ローカルインポート: {imported_count}件")
+        # Firebaseにインポート
+        imported_count = firebase_import_records(records)
+        app.logger.info(f"インポート成功: {imported_count}件")
         
         return jsonify({
             "success": True,
@@ -466,96 +410,100 @@ def import_records():
         })
     
     except Exception as e:
+        app.logger.error(f"インポートエラー: {str(e)}")
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": f"インポートに失敗しました: {str(e)}"
         })
 
 # CSVエクスポートAPI
 @app.route('/api/export-records')
 def export_records():
-    # 月パラメータを取得
-    month = request.args.get('month', 'all')
-    
-    # データを読み込み
-    use_firebase = session.get('use_firebase', False)
-    data = load_data(use_firebase)
-    records = data.get("records", [])
-    
-    # 月でフィルタリング
-    if month != 'all':
-        records = [r for r in records if r["timestamp"].startswith(month)]
-    
-    # CSVファイルを作成
-    output = StringIO()
-    writer = csv.writer(output)
-    
-    # ヘッダーを書き込み
-    writer.writerow(['日付', '名前', '種類', '時間', 'ID'])
-    
-    # レコードを書き込み
-    for record in records:
-        try:
-            # タイムスタンプを日本時間として解釈
-            timestamp_str = record["timestamp"]
-            if timestamp_str.endswith('Z'):
-                # UTC時間の場合は日本時間に変換
-                dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                dt = dt.astimezone(JST)
-            else:
-                # ISO形式のタイムスタンプをパース
-                dt = datetime.fromisoformat(timestamp_str)
-                if dt.tzinfo is None:
-                    # タイムゾーン情報がない場合は日本時間として扱う
-                    dt = JST.localize(dt)
-                else:
-                    # 日本時間に変換
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"error": "データベースに接続できません"}), 503
+        
+    try:
+        month = request.args.get('month', 'all')
+        data = load_data()
+        records = data.get("records", [])
+        
+        # 月でフィルタリング
+        if month != 'all':
+            records = [r for r in records if r["timestamp"].startswith(month)]
+        
+        # CSVファイルを作成
+        output = StringIO()
+        writer = csv.writer(output)
+        
+        # ヘッダーを書き込み
+        writer.writerow(['日付', '名前', '種類', '時間', 'ID'])
+        
+        # レコードを書き込み
+        for record in records:
+            try:
+                timestamp_str = record["timestamp"]
+                if timestamp_str.endswith('Z'):
+                    dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                     dt = dt.astimezone(JST)
-            
-            date = dt.strftime('%Y-%m-%d')
-            time = dt.strftime('%H:%M')
-            type_text = '入室' if record["type"] == 'in' else '退室'
-            
-            writer.writerow([date, record["userName"], type_text, time, record["id"]])
-        except Exception as e:
-            app.logger.error(f"CSV出力エラー: {str(e)} - Record: {record}")
-            continue
-    
-    # CSVデータを送信
-    csv_data = output.getvalue()
-    output.close()
-    
-    # エンコーディングをUTF-8 with BOMに設定
-    response = app.response_class(
-        '\ufeff' + csv_data,  # BOMを追加
-        mimetype='text/csv',
-        headers={
-            "Content-Disposition": f"attachment; filename=access_records_{month}.csv"
-        }
-    )
-    
-    return response
+                else:
+                    dt = datetime.fromisoformat(timestamp_str)
+                    if dt.tzinfo is None:
+                        dt = JST.localize(dt)
+                    else:
+                        dt = dt.astimezone(JST)
+                
+                date = dt.strftime('%Y-%m-%d')
+                time = dt.strftime('%H:%M')
+                type_text = '入室' if record["type"] == 'in' else '退室'
+                
+                writer.writerow([date, record["userName"], type_text, time, record["id"]])
+            except Exception as e:
+                app.logger.error(f"CSV出力エラー: {str(e)} - Record: {record}")
+                continue
+        
+        csv_data = output.getvalue()
+        output.close()
+        
+        response = app.response_class(
+            '\ufeff' + csv_data,
+            mimetype='text/csv',
+            headers={
+                "Content-Disposition": f"attachment; filename=access_records_{month}.csv"
+            }
+        )
+        
+        return response
+        
+    except Exception as e:
+        app.logger.error(f"CSVエクスポートエラー: {str(e)}")
+        return jsonify({"error": "エクスポートに失敗しました"}), 500
+
+# エラーページ用のテンプレートを追加
+@app.errorhandler(500)
+def internal_error(error):
+    return render_template('error.html',
+                         error_title="内部サーバーエラー",
+                         error_message="申し訳ございませんが、サーバーでエラーが発生しました。",
+                         firebase_status="不明"), 500
+
+@app.errorhandler(503)
+def service_unavailable(error):
+    return render_template('error.html',
+                         error_title="サービス利用不可",
+                         error_message="現在サービスが利用できません。しばらく時間をおいて再試行してください。",
+                         firebase_status="接続不可"), 503
 
 if __name__ == '__main__':
+    # アプリケーション初期化
+    initialize_app()
     # ローカル環境での実行
     app.run(debug=True, host='0.0.0.0', port=5000)
 else:
-    # 本番環境（Render）でも動作するように
-    import os
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_secret_key')
-    
-    # 起動時にFirebaseをテスト
-    try:
-        if FIREBASE_AVAILABLE:
-            print("Firebase接続をテスト中...")
-            db = initialize_firebase()
-            print("Firebase接続成功！")
-        else:
-            print("Firebase利用不可 - ローカルファイルモードで動作")
-    except Exception as e:
-        print(f"Firebase接続エラー - ローカルファイルモードで動作: {str(e)}")
-        FIREBASE_AVAILABLE = False
+    # 本番環境
+    # アプリケーション初期化
+    initialize_app()
     
     # 日本時間での起動メッセージ
     current_jst = get_jst_now()
     print(f"アプリケーション起動: {current_jst.strftime('%Y年%m月%d日 %H:%M:%S')} JST")
+    print(f"Firebase接続状態: {'OK' if FIREBASE_CONNECTION_OK else 'NG'}")
