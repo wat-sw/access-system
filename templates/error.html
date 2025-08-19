@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>エラー - 入退室管理システム</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .error-container {
+            max-width: 600px;
+            text-align: center;
+        }
+        .error-icon {
+            font-size: 4rem;
+            color: #dc3545;
+            margin-bottom: 1rem;
+        }
+        .status-badge {
+            font-size: 0.875rem;
+            margin-top: 1rem;
+        }
+        .retry-section {
+            margin-top: 2rem;
+            padding: 1rem;
+            background-color: #fff;
+            border-radius: 0.375rem;
+            border: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-container">
+            <div class="card shadow">
+                <div class="card-body p-5">
+                    <!-- エラーアイコン -->
+                    <div class="error-icon">
+                        <i class="bi bi-exclamation-triangle"></i>
+                    </div>
+                    
+                    <!-- エラータイトル -->
+                    <h1 class="h3 text-danger mb-3">
+                        {{ error_title or "システムエラー" }}
+                    </h1>
+                    
+                    <!-- エラーメッセージ -->
+                    <p class="text-muted mb-4">
+                        {{ error_message or "申し訳ございませんが、システムでエラーが発生しました。" }}
+                    </p>
+                    
+                    <!-- 状態表示 -->
+                    {% if firebase_status %}
+                    <div class="status-badge">
+                        <span class="badge bg-secondary">
+                            <i class="bi bi-info-circle"></i> 
+                            データベース状態: {{ firebase_status }}
+                        </span>
+                    </div>
+                    {% endif %}
+                    
+                    <!-- 再試行セクション -->
+                    <div class="retry-section">
+                        <h5 class="mb-3">
+                            <i class="bi bi-arrow-clockwise"></i> 対処方法
+                        </h5>
+                        
+                        <div class="row text-start">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <strong>1. ページの再読み込み</strong>
+                                    <p class="small text-muted">ブラウザの更新ボタンを押して再試行してください。</p>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <strong>2. 時間をおいて再試行</strong>
+                                    <p class="small text-muted">一時的な問題の可能性があります。少し時間をおいてアクセスしてください。</p>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <strong>3. ネットワーク接続確認</strong>
+                                    <p class="small text-muted">インターネット接続に問題がないか確認してください。</p>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <strong>4. 管理者への連絡</strong>
+                                    <p class="small text-muted">問題が続く場合は、システム管理者にお問い合わせください。</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- アクションボタン -->
+                    <div class="d-flex gap-2 justify-content-center mt-4">
+                        <button onclick="window.location.reload()" class="btn btn-primary">
+                            <i class="bi bi-arrow-clockwise"></i> ページを再読み込み
+                        </button>
+                        
+                        <a href="/" class="btn btn-outline-secondary">
+                            <i class="bi bi-house"></i> トップページへ
+                        </a>
+                        
+                        <button onclick="checkStatus()" class="btn btn-outline-info" id="statusBtn">
+                            <i class="bi bi-activity"></i> 状態確認
+                        </button>
+                    </div>
+                    
+                    <!-- 状態確認結果 -->
+                    <div id="statusResult" class="mt-3" style="display: none;">
+                        <div class="alert alert-info">
+                            <div class="d-flex align-items-center">
+                                <div class="spinner-border spinner-border-sm me-2" role="status">
+                                    <span class="visually-hidden">確認中...</span>
+                                </div>
+                                <span>システム状態を確認中...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- フッター情報 -->
+            <div class="mt-3 text-muted small">
+                <p>入退室管理システム | エラーページ</p>
+                <p id="currentTime"></p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 現在時刻を表示
+        function updateCurrentTime() {
+            const now = new Date();
+            const timeString = now.toLocaleString('ja-JP', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('currentTime').textContent = timeString;
+        }
+        
+        // 状態確認機能
+        async function checkStatus() {
+            const statusBtn = document.getElementById('statusBtn');
+            const statusResult = document.getElementById('statusResult');
+            
+            // ボタンを無効化
+            statusBtn.disabled = true;
+            statusBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> 確認中...';
+            statusResult.style.display = 'block';
+            
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                let statusClass = 'alert-success';
+                let statusIcon = 'bi-check-circle';
+                let statusText = 'システムは正常に動作しています';
+                
+                if (response.status !== 200 || data.status !== 'healthy') {
+                    statusClass = 'alert-warning';
+                    statusIcon = 'bi-exclamation-triangle';
+                    statusText = 'システムに問題があります';
+                }
+                
+                statusResult.innerHTML = `
+                    <div class="alert ${statusClass}">
+                        <div class="d-flex align-items-start">
+                            <i class="bi ${statusIcon} me-2"></i>
+                            <div>
+                                <strong>${statusText}</strong>
+                                <div class="small mt-1">
+                                    <div>Firebase接続: ${data.firebase_connection || '不明'}</div>
+                                    <div>確認時刻: ${new Date(data.timestamp_jst).toLocaleString('ja-JP')}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+            } catch (error) {
+                statusResult.innerHTML = `
+                    <div class="alert alert-danger">
+                        <div class="d-flex align-items-start">
+                            <i class="bi bi-x-circle me-2"></i>
+                            <div>
+                                <strong>状態確認に失敗しました</strong>
+                                <div class="small mt-1">ネットワーク接続またはサーバーに問題があります</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } finally {
+                // ボタンを元に戻す
+                statusBtn.disabled = false;
+                statusBtn.innerHTML = '<i class="bi bi-activity"></i> 状態確認';
+            }
+        }
+        
+        // 自動リロード機能（オプション）
+        function enableAutoReload() {
+            if (confirm('30秒後に自動的にページをリロードしますか？')) {
+                setTimeout(() => {
+                    window.location.reload();
+                }, 30000);
+                
+                // カウントダウン表示
+                let countdown = 30;
+                const countdownElement = document.createElement('div');
+                countdownElement.className = 'alert alert-info mt-3';
+                countdownElement.innerHTML = `
+                    <div class="text-center">
+                        <i class="bi bi-clock"></i> 
+                        <span id="countdown">${countdown}</span>秒後に自動リロードします
+                        <button onclick="clearTimeout(autoReloadTimer); this.parentElement.parentElement.remove();" class="btn btn-sm btn-outline-secondary ms-2">
+                            キャンセル
+                        </button>
+                    </div>
+                `;
+                document.querySelector('.card-body').appendChild(countdownElement);
+                
+                window.autoReloadTimer = setInterval(() => {
+                    countdown--;
+                    const countdownSpan = document.getElementById('countdown');
+                    if (countdownSpan) {
+                        countdownSpan.textContent = countdown;
+                    }
+                    if (countdown <= 0) {
+                        clearInterval(window.autoReloadTimer);
+                    }
+                }, 1000);
+            }
+        }
+        
+        // 初期化
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+            
+            // 5秒後に自動リロードオプションを表示
+            setTimeout(() => {
+                if (confirm('問題が解決されない場合、自動リロード機能を有効にしますか？')) {
+                    enableAutoReload();
+                }
+            }, 5000);
+        });
+        
+        // キーボードショートカット
+        document.addEventListener('keydown', function(e) {
+            // F5 または Ctrl+R で リロード
+            if (e.key === 'F5' || (e.ctrlKey && e.key === 'r')) {
+                e.preventDefault();
+                window.location.reload();
+            }
+            // Escでトップページへ
+            if (e.key === 'Escape') {
+                window.location.href = '/';
+            }
+        });
+    </script>
+</body>
+</html>
