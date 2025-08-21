@@ -307,7 +307,8 @@ def record_access():
             "error": "記録の保存に失敗しました。時間をおいて再試行してください。"
         })
 
-# 管理ページ
+
+# 管理ページ（修正版：全員の記録を表示）
 @app.route('/admin')
 def admin():
     # データベース接続確認
@@ -316,20 +317,97 @@ def admin():
         return db_error
         
     try:
+        # 全員のデータを取得（ログインユーザーに関係なく）
         data = load_data()
-        records = sorted(data.get("records", []), key=lambda x: x["timestamp"], reverse=True)
+        
+        # 全ての記録を時間の新しい順に並べ替え
+        all_records = sorted(data.get("records", []), key=lambda x: x["timestamp"], reverse=True)
+        
+        # 統計情報を計算
+        total_records = len(all_records)
+        unique_users = len(set(record["userName"] for record in all_records))
+        
+        # 今日の記録数を計算
+        today = get_jst_now().strftime('%Y-%m-%d')
+        today_records = [r for r in all_records if r["timestamp"].startswith(today)]
+        today_count = len(today_records)
         
         firebase_status = "Firebase連携中" if FIREBASE_CONNECTION_OK else "接続エラー"
         
         return render_template('admin.html', 
-                             records=records,
-                             firebase_status=firebase_status)
+                             records=all_records,
+                             firebase_status=firebase_status,
+                             total_records=total_records,
+                             unique_users=unique_users,
+                             today_count=today_count,
+                             current_user=session.get('user_name', ''))
     except Exception as e:
         app.logger.error(f"管理画面データ読み込みエラー: {str(e)}")
         return render_template('error.html',
                              error_title="データ読み込みエラー",
                              error_message="データの読み込みに失敗しました。",
                              firebase_status="エラー")
+
+# 管理画面用のユーザー一覧取得API（新規追加）
+@app.route('/api/users')
+def get_users():
+    """登録済みユーザー一覧を取得"""
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"success": False, "error": "データベースに接続できません"})
+    
+    try:
+        data = load_data()
+        users = data.get("users", [])
+        
+        # ユーザー名のリストを作成
+        user_names = [user["name"] for user in users]
+        
+        return jsonify({
+            "success": True,
+            "users": user_names,
+            "count": len(user_names)
+        })
+    except Exception as e:
+        app.logger.error(f"ユーザー一覧取得エラー: {str(e)}")
+        return jsonify({"success": False, "error": "ユーザー一覧の取得に失敗しました"})
+
+# 特定ユーザーの記録フィルタリングAPI（新規追加）
+@app.route('/api/records/filter')
+def filter_records():
+    """特定の条件で記録をフィルタリング"""
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"success": False, "error": "データベースに接続できません"})
+    
+    try:
+        user_name = request.args.get('user')
+        date = request.args.get('date')
+        month = request.args.get('month')
+        
+        data = load_data()
+        records = data.get("records", [])
+        
+        # フィルタリング
+        filtered_records = records
+        
+        if user_name:
+            filtered_records = [r for r in filtered_records if r["userName"] == user_name]
+        
+        if date:
+            filtered_records = [r for r in filtered_records if r["timestamp"].startswith(date)]
+        elif month:
+            filtered_records = [r for r in filtered_records if r["timestamp"].startswith(month)]
+        
+        # 時間の新しい順に並べ替え
+        filtered_records = sorted(filtered_records, key=lambda x: x["timestamp"], reverse=True)
+        
+        return jsonify({
+            "success": True,
+            "records": filtered_records,
+            "count": len(filtered_records)
+        })
+    except Exception as e:
+        app.logger.error(f"記録フィルタリングエラー: {str(e)}")
+        return jsonify({"success": False, "error": "記録の取得に失敗しました"})
 
 # 記録の編集API
 @app.route('/api/access/<record_id>', methods=['PUT'])
