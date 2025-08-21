@@ -570,6 +570,66 @@ def service_unavailable(error):
                          error_title="サービス利用不可",
                          error_message="現在サービスが利用できません。しばらく時間をおいて再試行してください。",
                          firebase_status="接続不可"), 503
+# 管理画面用のユーザー一覧取得API（新規追加）
+@app.route('/api/users')
+def get_users():
+    """登録済みユーザー一覧を取得"""
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"success": False, "error": "データベースに接続できません"})
+    
+    try:
+        data = load_data()
+        users = data.get("users", [])
+        
+        # ユーザー名のリストを作成
+        user_names = [user["name"] for user in users]
+        
+        return jsonify({
+            "success": True,
+            "users": user_names,
+            "count": len(user_names)
+        })
+    except Exception as e:
+        app.logger.error(f"ユーザー一覧取得エラー: {str(e)}")
+        return jsonify({"success": False, "error": "ユーザー一覧の取得に失敗しました"})
+
+# 特定ユーザーの記録フィルタリングAPI（新規追加）
+@app.route('/api/records/filter')
+def filter_records():
+    """特定の条件で記録をフィルタリング"""
+    if not FIREBASE_CONNECTION_OK:
+        return jsonify({"success": False, "error": "データベースに接続できません"})
+    
+    try:
+        user_name = request.args.get('user')
+        date = request.args.get('date')
+        month = request.args.get('month')
+        
+        data = load_data()
+        records = data.get("records", [])
+        
+        # フィルタリング
+        filtered_records = records
+        
+        if user_name:
+            filtered_records = [r for r in filtered_records if r["userName"] == user_name]
+        
+        if date:
+            filtered_records = [r for r in filtered_records if r["timestamp"].startswith(date)]
+        elif month:
+            filtered_records = [r for r in filtered_records if r["timestamp"].startswith(month)]
+        
+        # 時間の新しい順に並べ替え
+        filtered_records = sorted(filtered_records, key=lambda x: x["timestamp"], reverse=True)
+        
+        return jsonify({
+            "success": True,
+            "records": filtered_records,
+            "count": len(filtered_records)
+        })
+    except Exception as e:
+        app.logger.error(f"記録フィルタリングエラー: {str(e)}")
+        return jsonify({"success": False, "error": "記録の取得に失敗しました"})
 
 if __name__ == '__main__':
     # アプリケーション初期化
